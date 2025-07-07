@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmic Collector</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: radial-gradient(circle at center, #1a1a2e 0%, #0f0f23 100%);
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            color: white;
+        }
+
+        canvas {
+            display: block;
+            cursor: none;
+        }
+
+        .ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            font-size: 18px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+        }
+
+        .game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 30px;
+            border-radius: 20px;
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.3);
+            display: none;
+        }
+
+        .game-over h2 {
+            color: #00ffff;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .restart-btn {
+            background: linear-gradient(45deg, #ff6b6b, #ffd93d);
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .restart-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 20px rgba(255, 107, 107, 0.5);
+        }
+
+        .instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="ui">
+        <div>Score: <span id="score">0</span></div>
+        <div>Lives: <span id="lives">3</span></div>
+    </div>
+
+    <div class="game-over" id="gameOver">
+        <h2>Game Over!</h2>
+        <p>Final Score: <span id="finalScore">0</span></p>
+        <p>You collected <span id="starsCollected">0</span> stars!</p>
+        <button class="restart-btn" onclick="restartGame()">Play Again</button>
+    </div>
+
+    <div class="instructions">
+        Move mouse to control • Collect cyan stars • Avoid red obstacles
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Game state
+        let gameRunning = true;
+        let score = 0;
+        let lives = 3;
+        let starsCollected = 0;
+
+        // Player
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            size: 15,
+            trail: []
+        };
+
+        // Particles and effects
+        const particles = [];
+        const stars = [];
+        const obstacles = [];
+        const explosions = [];
+
+        // Mouse tracking
+        let mouseX = canvas.width / 2;
+        let mouseY = canvas.height / 2;
+
+        canvas.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+
+        // Particle class
+        class Particle {
+            constructor(x, y, color, size = 2) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 4;
+                this.vy = (Math.random() - 0.5) * 4;
+                this.color = color;
+                this.size = size;
+                this.life = 1;
+                this.decay = Math.random() * 0.02 + 0.01;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+                this.size *= 0.99;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // Star class
+        class Star {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 8 + 4;
+                this.glow = 0;
+                this.glowSpeed = 0.1;
+            }
+
+            update() {
+                this.glow += this.glowSpeed;
+                if (this.glow > 1 || this.glow < 0) {
+                    this.glowSpeed = -this.glowSpeed;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = '#00ffff';
+                ctx.fillStyle = `rgba(0, 255, 255, ${0.8 + this.glow * 0.2})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Star sparkle effect
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size * 0.5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // Obstacle class
+        class Obstacle {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 20 + 15;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.rotation = 0;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.rotation += 0.05;
+
+                // Bounce off walls
+                if (this.x < 0 || this.x > canvas.width) this.vx = -this.vx;
+                if (this.y < 0 || this.y > canvas.height) this.vy = -this.vy;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ff4444';
+                ctx.fillStyle = '#ff4444';
+                ctx.fillRect(-this.size/2, -this.size/2, this.size, this.size);
+                ctx.restore();
+            }
+        }
+
+        // Create explosion effect
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                particles.push(new Particle(x, y, color, Math.random() * 6 + 2));
+            }
+        }
+
+        // Initialize game objects
+        function init() {
+            // Create stars
+            for (let i = 0; i < 8; i++) {
+                stars.push(new Star());
+            }
+
+            // Create obstacles
+            for (let i = 0; i < 5; i++) {
+                obstacles.push(new Obstacle());
+            }
+        }
+
+        // Update game
+        function update() {
+            if (!gameRunning) return;
+
+            // Update player position smoothly
+            player.x += (mouseX - player.x) * 0.1;
+            player.y += (mouseY - player.y) * 0.1;
+
+            // Add player trail
+            player.trail.push({ x: player.x, y: player.y });
+            if (player.trail.length > 20) {
+                player.trail.shift();
+            }
+
+            // Create player particles
+            if (Math.random() < 0.3) {
+                particles.push(new Particle(player.x, player.y, '#ffffff', 3));
+            }
+
+            // Update particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                if (particles[i].life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+
+            // Update stars
+            stars.forEach(star => star.update());
+
+            // Update obstacles
+            obstacles.forEach(obstacle => obstacle.update());
+
+            // Check star collisions
+            for (let i = stars.length - 1; i >= 0; i--) {
+                const star = stars[i];
+                const dx = player.x - star.x;
+                const dy = player.y - star.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < player.size + star.size) {
+                    createExplosion(star.x, star.y, '#00ffff');
+                    stars.splice(i, 1);
+                    stars.push(new Star());
+                    score += 100;
+                    starsCollected++;
+                    document.getElementById('score').textContent = score;
+                }
+            }
+
+            // Check obstacle collisions
+            obstacles.forEach(obstacle => {
+                const dx = player.x - obstacle.x;
+                const dy = player.y - obstacle.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < player.size + obstacle.size) {
+                    createExplosion(player.x, player.y, '#ff4444');
+                    lives--;
+                    document.getElementById('lives').textContent = lives;
+                    
+                    if (lives <= 0) {
+                        gameOver();
+                    }
+                }
+            });
+
+            // Spawn new obstacles occasionally
+            if (Math.random() < 0.005) {
+                obstacles.push(new Obstacle());
+            }
+        }
+
+        // Draw everything
+        function draw() {
+            // Clear canvas with fade effect
+            ctx.fillStyle = 'rgba(26, 26, 46, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw background stars
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            for (let i = 0; i < 100; i++) {
+                const x = (i * 123.456) % canvas.width;
+                const y = (i * 789.123) % canvas.height;
+                ctx.beginPath();
+                ctx.arc(x, y, 1, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw particles
+            particles.forEach(particle => particle.draw());
+
+            // Draw player trail
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 8;
+            ctx.beginPath();
+            for (let i = 0; i < player.trail.length; i++) {
+                const point = player.trail[i];
+                if (i === 0) {
+                    ctx.moveTo(point.x, point.y);
+                } else {
+                    ctx.lineTo(point.x, point.y);
+                }
+            }
+            ctx.stroke();
+
+            // Draw player
+            ctx.save();
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#ffffff';
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            // Draw stars
+            stars.forEach(star => star.draw());
+
+            // Draw obstacles
+            obstacles.forEach(obstacle => obstacle.draw());
+        }
+
+        // Game over
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('starsCollected').textContent = starsCollected;
+            document.getElementById('gameOver').style.display = 'block';
+        }
+
+        // Restart game
+        function restartGame() {
+            gameRunning = true;
+            score = 0;
+            lives = 3;
+            starsCollected = 0;
+            particles.length = 0;
+            stars.length = 0;
+            obstacles.length = 0;
+            player.trail.length = 0;
+            document.getElementById('score').textContent = score;
+            document.getElementById('lives').textContent = lives;
+            document.getElementById('gameOver').style.display = 'none';
+            init();
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Start game
+        init();
+        gameLoop();
+    </script>
+</body>
+</html>
